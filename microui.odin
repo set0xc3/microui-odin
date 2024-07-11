@@ -1098,12 +1098,12 @@ textbox_raw :: proc(
 		}
 
 		/* handle text input */
-		if strings.builder_len(ctx.text_input) > 0 {
-			if textedit.input_text(&ctx.textbox_state, strings.to_string(ctx.text_input)) > 0 {
-				textlen^ = strings.builder_len(builder)
-				res += {.CHANGE}
-			}
-		}
+		// if strings.builder_len(ctx.text_input) > 0 {
+		// 	if textedit.input_text(&ctx.textbox_state, strings.to_string(ctx.text_input)) > 0 {
+		// 		textlen^ = strings.builder_len(builder)
+		// 		res += {.CHANGE}
+		// 	}
+		// }
 		/* handle ctrl+a */
 		if .A in ctx.key_pressed_bits &&
 		   .CTRL in ctx.key_down_bits &&

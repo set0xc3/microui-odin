@@ -1587,15 +1587,28 @@ begin_window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Options{})
 
 	/* do `resize` handle */
 	if .NO_RESIZE not_in opt {
+		@(static)
+		tmp_start: Vec2
+		@(static)
+		tmp_size: Vec2
+
 		sz := ctx.style.footer_height
 		rid := get_id(ctx, "!resize")
 		r := Rect{rect.x + rect.w - sz, rect.y + rect.h - sz, sz, sz}
+
 		draw_icon(ctx, .RESIZE, r, ctx.style.colors[.TEXT])
 		update_control(ctx, rid, r, opt)
-		if rid == ctx.focus_id && .LEFT in ctx.mouse_down_bits {
-			cnt.rect.w = max(96, cnt.rect.w + ctx.mouse_delta.x)
-			cnt.rect.h = max(64, cnt.rect.h + ctx.mouse_delta.y)
+
+		if rid == ctx.focus_id && .LEFT in ctx.mouse_pressed_bits {
+			tmp_start = ctx.mouse_pos
+			tmp_size = {cnt.rect.w, cnt.rect.h}
 		}
+
+		if rid == ctx.focus_id && .LEFT in ctx.mouse_down_bits {
+			cnt.rect.w = max(96, tmp_size.x + ctx.mouse_pos.x - tmp_start.x)
+			cnt.rect.h = max(64, tmp_size.y + ctx.mouse_pos.y - tmp_start.y)
+		}
+
 		body.h -= sz
 	}
 

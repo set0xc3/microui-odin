@@ -259,6 +259,8 @@ Context :: struct {
 	text_input:                      strings.Builder, // uses `_text_store` as backing store with nil_allocator.
 	textbox_state:                   textedit.State,
 	textbox_offset:                  i32,
+	next_item_size:                  Vec2,
+	next_item_pos:                   Vec2,
 }
 
 Stack :: struct($T: typeid, $N: int) {
@@ -885,7 +887,6 @@ layout_next :: proc(ctx: ^Context) -> (res: Rect) {
 	layout.max.y = max(layout.max.y, res.y + res.h)
 	return
 }
-
 /*============================================================================
 ** controls
 **============================================================================*/
@@ -1541,9 +1542,21 @@ begin_window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Options{})
 	push(&ctx.id_stack, id)
 	rect := rect
 
-	if cnt.rect.w == 0 {
+	if cnt.rect.w == 0 || cnt.rect.h == 0 {
 		cnt.rect = rect
 	}
+
+	if ctx.next_item_pos.x != 0 || ctx.next_item_pos.y != 0 {
+		cnt.rect.x = ctx.next_item_pos.x
+		cnt.rect.y = ctx.next_item_pos.y
+		ctx.next_item_pos = {}
+	}
+	if ctx.next_item_size.x != 0 || ctx.next_item_size.y != 0 {
+		cnt.rect.w = ctx.next_item_size.x
+		cnt.rect.h = ctx.next_item_size.y
+		ctx.next_item_size = {}
+	}
+
 	begin_root_container(ctx, cnt)
 	rect = cnt.rect
 	body := cnt.rect
@@ -1587,10 +1600,8 @@ begin_window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Options{})
 
 	/* do `resize` handle */
 	if .NO_RESIZE not_in opt {
-		@(static)
-		tmp_start: Vec2
-		@(static)
-		tmp_size: Vec2
+		@(static) tmp_start: Vec2
+		@(static) tmp_size: Vec2
 
 		sz := ctx.style.footer_height
 		rid := get_id(ctx, "!resize")
@@ -1705,3 +1716,11 @@ mouse_released :: #force_inline proc(ctx: ^Context) -> bool {return ctx.mouse_re
 mouse_pressed :: #force_inline proc(ctx: ^Context) -> bool {return ctx.mouse_pressed_bits != nil}
 @(private)
 mouse_down :: #force_inline proc(ctx: ^Context) -> bool {return ctx.mouse_down_bits != nil}
+
+set_next_item_pos :: proc(ctx: ^Context, pos: Vec2) {
+	ctx.next_item_pos = pos
+}
+
+set_next_item_size :: proc(ctx: ^Context, size: Vec2) {
+	ctx.next_item_size = size
+}

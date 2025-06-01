@@ -533,7 +533,7 @@ get_current_container :: proc(ctx: ^Context) -> ^Container {
 	return ctx.container_stack.data[ctx.container_stack.len - 1]
 }
 
-@(private)
+// @(private)
 internal_get_container :: proc(ctx: ^Context, id: Id, opt: Option_Set) -> ^Container {
 	/* try to get existing container from pool */
 	idx, ok := pool_get(ctx, ctx.container_pool[:], id)
@@ -713,12 +713,28 @@ draw_box :: proc(ctx: ^Context, rect: Rect, color: Color) {
 draw_text :: proc(ctx: ^Context, font: Font, str: string, pos: Vec2, color: Color) {
 	rect := Rect{pos.x, pos.y, ctx.text_width(font, str), ctx.text_height(font)}
 	clipped := check_clip(ctx, rect)
+	str := str
 	switch clipped {
-	case .NONE: // okay
+	case .NONE:
+	// okay
 	case .ALL:
 		return
 	case .PART:
-		set_clip(ctx, get_clip_rect(ctx))
+		cr := get_clip_rect(ctx)
+		r := rect
+		available_width := (cr.x + cr.w) - rect.x - 20
+		i := 0
+		for i < len(str) {
+			substr := str[:i]
+			if ctx.text_width(font, substr) > available_width {
+				break
+			}
+			i += 1
+		}
+		str = string(str[:i])
+		if ctx.text_width(font, str) <= available_width {
+			set_clip(ctx, get_clip_rect(ctx))
+		}
 	}
 	/* add command */
 	text_cmd := push_command(ctx, Command_Text, len(str))
@@ -729,6 +745,7 @@ draw_text :: proc(ctx: ^Context, font: Font, str: string, pos: Vec2, color: Colo
 	dst_str := ([^]byte)(text_cmd)[size_of(Command_Text):][:len(str)]
 	copy(dst_str, str)
 	text_cmd.str = string(dst_str)
+
 	/* reset clipping if it was set */
 	if clipped != .NONE {
 		set_clip(ctx, unclipped_rect)
@@ -986,7 +1003,7 @@ text :: proc(ctx: ^Context, text: string) {
 				start = i + 1
 			}
 		}
-		draw_text(ctx, font, text[:end], Vec2{r.x, r.y}, color)
+		draw_text(ctx, font, text[:], Vec2{r.x, r.y}, color)
 		text = text[end:]
 	}
 	layout_end_column(ctx)
@@ -1648,15 +1665,17 @@ open_popup :: proc(ctx: ^Context, name: string) {
 	bring_to_front(ctx, cnt)
 }
 
-close_popup :: proc(ctx: ^Context, title: string, opt := Option_Set{}) {
+close_popup :: proc(ctx: ^Context, title: string) {
 	assert(title != "", "missing popup title")
-	id := get_id(ctx, title)
-	cnt := internal_get_container(ctx, id, opt)
+	cnt := get_container(ctx, title)
 	cnt.open = false
 }
 
-begin_popup :: proc(ctx: ^Context, name: string) -> bool {
-	opt := Option_Set{.POPUP, .AUTO_SIZE, .NO_RESIZE, .NO_SCROLL, .NO_TITLE, .CLOSED}
+begin_popup :: proc(
+	ctx: ^Context,
+	name: string,
+	opt := Option_Set{.POPUP, .AUTO_SIZE, .NO_RESIZE, .NO_SCROLL, .NO_TITLE, .CLOSED},
+) -> bool {
 	return begin_window(ctx, name, Rect{}, opt)
 }
 
@@ -1682,6 +1701,7 @@ begin_panel :: proc(ctx: ^Context, name: string, opt := Option_Set{}) {
 	push_id(ctx, name)
 	cnt := internal_get_container(ctx, ctx.last_id, opt)
 	cnt.rect = layout_next(ctx)
+	update_control(ctx, get_id(ctx, name), cnt.rect, opt)
 	if .NO_FRAME not_in opt {
 		ctx.draw_frame(ctx, cnt.rect, .PANEL_BG)
 	}

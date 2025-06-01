@@ -1670,6 +1670,13 @@ open_popup :: proc(ctx: ^Context, name: string) {
 	bring_to_front(ctx, cnt)
 }
 
+close_popup :: proc(ctx: ^Context, title: string, opt := Options{}) {
+	assert(title != "", "missing popup title")
+	id := get_id(ctx, title)
+	cnt := internal_get_container(ctx, id, opt)
+	cnt.open = false
+}
+
 begin_popup :: proc(ctx: ^Context, name: string) -> bool {
 	opt := Options{.POPUP, .AUTO_SIZE, .NO_RESIZE, .NO_SCROLL, .NO_TITLE, .CLOSED}
 	return begin_window(ctx, name, Rect{}, opt)

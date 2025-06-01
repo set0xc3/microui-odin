@@ -24,6 +24,7 @@
 
 package microui
 
+import "core:container/small_array"
 import "core:fmt"
 import "core:math"
 import "core:sort"
@@ -127,7 +128,6 @@ Key :: enum u32 {
 Key_Set :: distinct bit_set[Key;u32]
 
 Id :: distinct u32
-Real :: f32
 Font :: distinct rawptr
 Vec2 :: distinct [2]i32
 Rect :: struct {
@@ -238,12 +238,12 @@ Context :: struct {
 	number_edit_len:                 int,
 	number_edit_id:                  Id,
 	/* stacks */
-	command_list:                    Stack(u8, COMMAND_LIST_SIZE),
-	root_list:                       Stack(^Container, ROOT_LIST_SIZE),
-	container_stack:                 Stack(^Container, CONTAINER_STACK_SIZE),
-	clip_stack:                      Stack(Rect, CLIP_STACK_SIZE),
-	id_stack:                        Stack(Id, ID_STACK_SIZE),
-	layout_stack:                    Stack(Layout, LAYOUT_STACK_SIZE),
+	command_list:                    small_array.Small_Array(COMMAND_LIST_SIZE, u8),
+	root_list:                       small_array.Small_Array(ROOT_LIST_SIZE, ^Container),
+	container_stack:                 small_array.Small_Array(CONTAINER_STACK_SIZE, ^Container),
+	clip_stack:                      small_array.Small_Array(CLIP_STACK_SIZE, Rect),
+	id_stack:                        small_array.Small_Array(ID_STACK_SIZE, Id),
+	layout_stack:                    small_array.Small_Array(LAYOUT_STACK_SIZE, Layout),
 	/* retained state pools */
 	container_pool:                  [CONTAINER_POOL_SIZE]Pool_Item,
 	containers:                      [CONTAINER_POOL_SIZE]Container,
@@ -261,20 +261,6 @@ Context :: struct {
 	textbox_offset:                  i32,
 	next_item_size:                  Vec2,
 	next_item_pos:                   Vec2,
-}
-
-Stack :: struct($T: typeid, $N: int) {
-	idx:   i32,
-	items: [N]T,
-}
-push :: #force_inline proc(stk: ^$T/Stack($V, $N), val: V) {
-	assert(stk.idx < len(stk.items))
-	stk.items[stk.idx] = val
-	stk.idx += 1
-}
-pop :: #force_inline proc(stk: ^$T/Stack($V, $N)) {
-	assert(stk.idx > 0)
-	stk.idx -= 1
 }
 
 unclipped_rect := Rect{0, 0, 0x1000000, 0x1000000}
@@ -357,8 +343,8 @@ init :: proc(
 begin :: proc(ctx: ^Context) {
 	assert(ctx.text_width != nil, "ctx.text_width is not set")
 	assert(ctx.text_height != nil, "ctx.text_height is not set")
-	ctx.command_list.idx = 0
-	ctx.root_list.idx = 0
+	small_array.clear(&ctx.command_list)
+	small_array.clear(&ctx.root_list)
 	ctx.scroll_target = nil
 	ctx.hover_root = ctx.next_hover_root
 	ctx.next_hover_root = nil
@@ -368,12 +354,6 @@ begin :: proc(ctx: ^Context) {
 }
 
 end :: proc(ctx: ^Context) {
-	/* check stacks */
-	assert(ctx.container_stack.idx == 0)
-	assert(ctx.clip_stack.idx == 0)
-	assert(ctx.id_stack.idx == 0)
-	assert(ctx.layout_stack.idx == 0)
-
 	/* handle scroll input */
 	if ctx.scroll_target != nil {
 		ctx.scroll_target.scroll.x += ctx.scroll_delta.x
@@ -403,21 +383,21 @@ end :: proc(ctx: ^Context) {
 	ctx.last_mouse_pos = ctx.mouse_pos
 
 	/* sort root containers by zindex */
-	n := ctx.root_list.idx
-	sort.quick_sort_proc(ctx.root_list.items[:n], proc(a, b: ^Container) -> int {
+	n := ctx.root_list.len
+	sort.quick_sort_proc(ctx.root_list.data[:n], proc(a, b: ^Container) -> int {
 		return int(a.zindex) - int(b.zindex)
 	})
 
 	/* set root container jump commands */
-	for i: i32 = 0; i < n; i += 1 {
-		cnt := ctx.root_list.items[i]
+	for i: int = 0; i < n; i += 1 {
+		cnt := ctx.root_list.data[i]
 		/* if this is the first container then make the first command jump to it.
 		** otherwise set the previous container's tail to jump to this one */
 		if i == 0 {
-			cmd := (^Command_Jump)(&ctx.command_list.items[0])
+			cmd := (^Command_Jump)(&ctx.command_list.data[0])
 			cmd.dst = rawptr(uintptr(cnt.head) + size_of(Command_Jump))
 		} else {
-			prev := ctx.root_list.items[i - 1]
+			prev := ctx.root_list.data[i - 1]
 			prev.tail.variant.(^Command_Jump).dst = rawptr(
 				uintptr(cnt.head) + size_of(Command_Jump),
 			)
@@ -425,7 +405,7 @@ end :: proc(ctx: ^Context) {
 		/* make the last container's tail jump to the end of command list */
 		if i == n - 1 {
 			cnt.tail.variant.(^Command_Jump).dst = rawptr(
-				&ctx.command_list.items[ctx.command_list.idx],
+				&ctx.command_list.data[ctx.command_list.len],
 			)
 		}
 	}
@@ -468,8 +448,8 @@ get_id_bytes :: proc(ctx: ^Context, bytes: []byte) -> Id {
 		}
 	}
 
-	idx := ctx.id_stack.idx
-	res := ctx.id_stack.items[idx - 1] if idx > 0 else HASH_INITIAL
+	idx := ctx.id_stack.len
+	res := ctx.id_stack.data[idx - 1] if idx > 0 else HASH_INITIAL
 	hash(&res, bytes)
 	ctx.last_id = res
 	return res
@@ -481,39 +461,35 @@ push_id :: proc {
 	push_id_rawptr,
 	push_id_uintptr,
 }
-push_id_string :: #force_inline proc(ctx: ^Context, str: string) {push(
-		&ctx.id_stack,
-		get_id(ctx, str),
-	)}
-push_id_rawptr :: #force_inline proc(ctx: ^Context, data: rawptr, size: int) {push(
-		&ctx.id_stack,
-		get_id(ctx, data, size),
-	)}
-push_id_uintptr :: #force_inline proc(ctx: ^Context, ptr: uintptr) {push(
-		&ctx.id_stack,
-		get_id(ctx, ptr),
-	)}
-push_id_bytes :: #force_inline proc(ctx: ^Context, bytes: []byte) {push(
-		&ctx.id_stack,
-		get_id(ctx, bytes),
-	)}
+push_id_string :: #force_inline proc(ctx: ^Context, str: string) {
+	small_array.push_back(&ctx.id_stack, get_id(ctx, str))
+}
+push_id_rawptr :: #force_inline proc(ctx: ^Context, data: rawptr, size: int) {
+	small_array.push_back(&ctx.id_stack, get_id(ctx, data, size))
+}
+push_id_uintptr :: #force_inline proc(ctx: ^Context, ptr: uintptr) {
+	small_array.push_back(&ctx.id_stack, get_id(ctx, ptr))
+}
+push_id_bytes :: #force_inline proc(ctx: ^Context, bytes: []byte) {
+	small_array.push_back(&ctx.id_stack, get_id(ctx, bytes))
+}
 
 pop_id :: proc(ctx: ^Context) {
-	pop(&ctx.id_stack)
+	small_array.pop_back(&ctx.id_stack)
 }
 
 push_clip_rect :: proc(ctx: ^Context, rect: Rect) {
 	last := get_clip_rect(ctx)
-	push(&ctx.clip_stack, intersect_rects(rect, last))
+	small_array.push_back(&ctx.clip_stack, intersect_rects(rect, last))
 }
 
 pop_clip_rect :: proc(ctx: ^Context) {
-	pop(&ctx.clip_stack)
+	small_array.pop_back(&ctx.clip_stack)
 }
 
 get_clip_rect :: proc(ctx: ^Context) -> Rect {
-	assert(ctx.clip_stack.idx > 0)
-	return ctx.clip_stack.items[ctx.clip_stack.idx - 1]
+	assert(ctx.clip_stack.len > 0)
+	return ctx.clip_stack.data[ctx.clip_stack.len - 1]
 }
 
 check_clip :: proc(ctx: ^Context, r: Rect) -> Clip {
@@ -528,7 +504,7 @@ check_clip :: proc(ctx: ^Context, r: Rect) -> Clip {
 }
 
 get_layout :: proc(ctx: ^Context) -> ^Layout {
-	return &ctx.layout_stack.items[ctx.layout_stack.idx - 1]
+	return &ctx.layout_stack.data[ctx.layout_stack.len - 1]
 }
 
 @(private)
@@ -536,7 +512,7 @@ push_layout :: proc(ctx: ^Context, body: Rect, scroll: Vec2) {
 	layout: Layout
 	layout.body = Rect{body.x - scroll.x, body.y - scroll.y, body.w, body.h}
 	layout.max = Vec2{-0x1000000, -0x1000000}
-	push(&ctx.layout_stack, layout)
+	small_array.push_back(&ctx.layout_stack, layout)
 	layout_row(ctx, {0})
 }
 
@@ -547,14 +523,14 @@ pop_container :: proc(ctx: ^Context) {
 	cnt.content_size.x = layout.max.x - layout.body.x
 	cnt.content_size.y = layout.max.y - layout.body.y
 	/* pop container, layout and id */
-	pop(&ctx.container_stack)
-	pop(&ctx.layout_stack)
+	small_array.pop_back(&ctx.container_stack)
+	small_array.pop_back(&ctx.layout_stack)
 	pop_id(ctx)
 }
 
 get_current_container :: proc(ctx: ^Context) -> ^Container {
-	assert(ctx.container_stack.idx > 0)
-	return ctx.container_stack.items[ctx.container_stack.idx - 1]
+	assert(ctx.container_stack.len > 0)
+	return ctx.container_stack.data[ctx.container_stack.len - 1]
 }
 
 @(private)
@@ -663,9 +639,9 @@ input_text :: proc(ctx: ^Context, text: string) {
 
 push_command :: proc(ctx: ^Context, $Type: typeid, extra_size := 0) -> ^Type {
 	size := i32(size_of(Type) + extra_size)
-	cmd := transmute(^Type)&ctx.command_list.items[ctx.command_list.idx]
-	assert(ctx.command_list.idx + size < COMMAND_LIST_SIZE)
-	ctx.command_list.idx += size
+	cmd := transmute(^Type)&ctx.command_list.data[ctx.command_list.len]
+	assert(ctx.command_list.len + int(size) < COMMAND_LIST_SIZE)
+	ctx.command_list.len += int(size)
 	cmd.variant = cmd
 	cmd.size = size
 	return cmd
@@ -677,10 +653,10 @@ next_command :: proc "contextless" (ctx: ^Context, pcmd: ^^Command) -> bool {
 	if cmd != nil {
 		cmd = (^Command)(uintptr(cmd) + uintptr(cmd.size))
 	} else {
-		cmd = (^Command)(&ctx.command_list.items[0])
+		cmd = (^Command)(&ctx.command_list.data[0])
 	}
 	invalid_command :: #force_inline proc "contextless" (ctx: ^Context) -> ^Command {
-		return (^Command)(&ctx.command_list.items[ctx.command_list.idx])
+		return (^Command)(&ctx.command_list.data[ctx.command_list.len])
 	}
 	for cmd != invalid_command(ctx) {
 		if jmp, ok := cmd.variant.(^Command_Jump); ok {
@@ -790,7 +766,7 @@ layout_begin_column :: proc(ctx: ^Context) {
 
 layout_end_column :: proc(ctx: ^Context) {
 	b := get_layout(ctx)
-	pop(&ctx.layout_stack)
+	small_array.pop_back(&ctx.layout_stack)
 	/* inherit position/next_row/max from child layout if they are greater */
 	a := get_layout(ctx)
 	a.position.x = max(a.position.x, b.position.x + b.body.x - a.body.x)
@@ -893,13 +869,13 @@ layout_next :: proc(ctx: ^Context) -> (res: Rect) {
 
 @(private)
 in_hover_root :: proc(ctx: ^Context) -> bool {
-	for i := ctx.container_stack.idx - 1; i >= 0; i -= 1 {
-		if ctx.container_stack.items[i] == ctx.hover_root {
+	for i := ctx.container_stack.len - 1; i >= 0; i -= 1 {
+		if ctx.container_stack.data[i] == ctx.hover_root {
 			return true
 		}
 		/* only root containers have their `head` field set; stop searching if we've
 		** reached the current root container */
-		if ctx.container_stack.items[i].head != nil {
+		if ctx.container_stack.data[i].head != nil {
 			break
 		}
 	}
@@ -1240,12 +1216,12 @@ textbox_raw :: proc(
 }
 
 @(private)
-parse_real :: #force_inline proc(s: string) -> (Real, bool) {
+parse_f32 :: #force_inline proc(s: string) -> (f32, bool) {
 	f, ok := strconv.parse_f64(s)
-	return Real(f), ok
+	return f32(f), ok
 }
 
-number_textbox :: proc(ctx: ^Context, value: ^Real, r: Rect, id: Id, fmt_string: string) -> bool {
+number_textbox :: proc(ctx: ^Context, value: ^f32, r: Rect, id: Id, fmt_string: string) -> bool {
 	if ctx.mouse_pressed_bits == {.LEFT} && .SHIFT in ctx.key_down_bits && ctx.hover_id == id {
 		ctx.number_edit_id = id
 		nstr := fmt.bprintf(ctx.number_edit_buf[:], fmt_string, value^)
@@ -1254,7 +1230,7 @@ number_textbox :: proc(ctx: ^Context, value: ^Real, r: Rect, id: Id, fmt_string:
 	if ctx.number_edit_id == id {
 		res := textbox_raw(ctx, ctx.number_edit_buf[:], &ctx.number_edit_len, id, r, {})
 		if .SUBMIT in res || ctx.focus_id != id {
-			value^, _ = parse_real(string(ctx.number_edit_buf[:ctx.number_edit_len]))
+			value^, _ = parse_f32(string(ctx.number_edit_buf[:ctx.number_edit_len]))
 			ctx.number_edit_id = 0
 		} else {
 			return true
@@ -1271,9 +1247,9 @@ textbox :: proc(ctx: ^Context, buf: []u8, textlen: ^int, opt := Options{}) -> Re
 
 slider :: proc(
 	ctx: ^Context,
-	value: ^Real,
-	low, high: Real,
-	step: Real = 0.0,
+	value: ^f32,
+	low, high: f32,
+	step: f32 = 0.0,
 	fmt_string: string = SLIDER_FMT,
 	opt: Options = {.ALIGN_CENTER},
 ) -> (
@@ -1294,7 +1270,7 @@ slider :: proc(
 
 	/* handle input */
 	if ctx.focus_id == id && ctx.mouse_down_bits == {.LEFT} {
-		v = low + Real(ctx.mouse_pos.x - base.x) * (high - low) / Real(base.w)
+		v = low + f32(ctx.mouse_pos.x - base.x) * (high - low) / f32(base.w)
 		if step != 0.0 {
 			v = math.floor((v + step / 2) / step) * step
 		}
@@ -1309,7 +1285,7 @@ slider :: proc(
 	draw_control_frame(ctx, id, base, .BASE, opt)
 	/* draw thumb */
 	w := ctx.style.thumb_size
-	x := i32((v - low) * Real(base.w - w) / (high - low))
+	x := i32((v - low) * f32(base.w - w) / (high - low))
 	thumb := Rect{base.x + x, base.y, w, base.h}
 	draw_control_frame(ctx, id, thumb, .BUTTON, opt)
 	/* draw text  */
@@ -1321,8 +1297,8 @@ slider :: proc(
 
 number :: proc(
 	ctx: ^Context,
-	value: ^Real,
-	step: Real,
+	value: ^f32,
+	step: f32,
 	fmt_string: string = SLIDER_FMT,
 	opt: Options = {.ALIGN_CENTER},
 ) -> (
@@ -1342,7 +1318,7 @@ number :: proc(
 
 	/* handle input */
 	if ctx.focus_id == id && ctx.mouse_down_bits == {.LEFT} {
-		value^ += Real(ctx.mouse_delta.x) * step
+		value^ += f32(ctx.mouse_delta.x) * step
 	}
 	/* set flag if value changed */
 	if value^ != last {
@@ -1408,7 +1384,7 @@ begin_treenode :: proc(ctx: ^Context, label: string, opt := Options{}) -> Result
 	res := _header(ctx, label, true, opt)
 	if .ACTIVE in res {
 		get_layout(ctx).indent += ctx.style.indent
-		push(&ctx.id_stack, ctx.last_id)
+		small_array.push_back(&ctx.id_stack, ctx.last_id)
 	}
 	return res
 }
@@ -1504,9 +1480,9 @@ push_container_body :: proc(ctx: ^Context, cnt: ^Container, body: Rect, opt := O
 
 @(private)
 begin_root_container :: proc(ctx: ^Context, cnt: ^Container) {
-	push(&ctx.container_stack, cnt)
+	small_array.push_back(&ctx.container_stack, cnt)
 	/* push container to roots list and push head command */
-	push(&ctx.root_list, cnt)
+	small_array.push_back(&ctx.root_list, cnt)
 	cnt.head = push_jump(ctx, nil)
 	/* set as hover root if the mouse is overlapping this container and it has a
 	** higher zindex than the current hover root */
@@ -1517,7 +1493,7 @@ begin_root_container :: proc(ctx: ^Context, cnt: ^Container) {
 	/* clipping is reset here in case a root-container is made within
 	** another root-containers's begin/end block; this prevents the inner
 	** root-container being clipped to the outer */
-	push(&ctx.clip_stack, unclipped_rect)
+	small_array.push_back(&ctx.clip_stack, unclipped_rect)
 }
 
 @(private)
@@ -1526,7 +1502,7 @@ end_root_container :: proc(ctx: ^Context) {
 	** on initing these are done in end() */
 	cnt := get_current_container(ctx)
 	cnt.tail = push_jump(ctx, nil)
-	cnt.head.variant.(^Command_Jump).dst = &ctx.command_list.items[ctx.command_list.idx]
+	cnt.head.variant.(^Command_Jump).dst = &ctx.command_list.data[ctx.command_list.len]
 	/* pop base clip rect and container */
 	pop_clip_rect(ctx)
 	pop_container(ctx)
@@ -1539,7 +1515,7 @@ begin_window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Options{})
 	if cnt == nil || !cnt.open {
 		return false
 	}
-	push(&ctx.id_stack, id)
+	small_array.push_back(&ctx.id_stack, id)
 	rect := rect
 
 	if cnt.rect.w == 0 || cnt.rect.h == 0 {
@@ -1707,7 +1683,7 @@ begin_panel :: proc(ctx: ^Context, name: string, opt := Options{}) {
 	if .NO_FRAME not_in opt {
 		ctx.draw_frame(ctx, cnt.rect, .PANEL_BG)
 	}
-	push(&ctx.container_stack, cnt)
+	small_array.push_back(&ctx.container_stack, cnt)
 	push_container_body(ctx, cnt, cnt.rect, opt)
 	push_clip_rect(ctx, cnt.body)
 }

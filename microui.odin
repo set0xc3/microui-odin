@@ -61,10 +61,10 @@ Color_Type :: enum u32 {
 	PANEL_BG,
 	BUTTON,
 	BUTTON_HOVER = BUTTON + 1,
-	BUTTON_FOCUS = BUTTON + 2,
+	BUTTON_HOT = BUTTON + 2,
 	BASE,
 	BASE_HOVER = BASE + 1,
-	BASE_FOCUS = BASE + 2,
+	BASE_HOT = BASE + 2,
 	SCROLL_BASE,
 	SCROLL_THUMB,
 }
@@ -85,7 +85,7 @@ Result :: enum u32 {
 }
 Result_Set :: bit_set[Result;u32]
 
-Opt :: enum u32 {
+Option :: enum u32 {
 	ALIGN_CENTER,
 	ALIGN_RIGHT,
 	NO_INTERACT,
@@ -94,13 +94,13 @@ Opt :: enum u32 {
 	NO_SCROLL,
 	NO_CLOSE,
 	NO_TITLE,
-	HOLD_FOCUS,
+	HOLD_HOT,
 	AUTO_SIZE,
 	POPUP,
 	CLOSED,
 	EXPANDED,
 }
-Options :: distinct bit_set[Opt;u32]
+Option_Set :: distinct bit_set[Option;u32]
 
 Mouse :: enum u32 {
 	LEFT,
@@ -227,10 +227,10 @@ Context :: struct {
 	/* core state */
 	_style:                          Style,
 	style:                           ^Style,
-	hover_id, focus_id, last_id:     Id,
+	hover_id, hot_id, last_id:       Id,
 	last_rect:                       Rect,
 	last_zindex:                     i32,
-	updated_focus:                   b32,
+	updated_hot:                     b32,
 	frame:                           Frame_Index,
 	hover_root, next_hover_root:     ^Container,
 	scroll_target:                   ^Container,
@@ -285,10 +285,10 @@ default_style := Style {
 		.PANEL_BG = {0, 0, 0, 0},
 		.BUTTON = {75, 75, 75, 255},
 		.BUTTON_HOVER = {95, 95, 95, 255},
-		.BUTTON_FOCUS = {115, 115, 115, 255},
+		.BUTTON_HOT = {115, 115, 115, 255},
 		.BASE = {30, 30, 30, 255},
 		.BASE_HOVER = {35, 35, 35, 255},
-		.BASE_FOCUS = {40, 40, 40, 255},
+		.BASE_HOT = {40, 40, 40, 255},
 		.SCROLL_BASE = {43, 43, 43, 255},
 		.SCROLL_THUMB = {30, 30, 30, 255},
 	},
@@ -360,11 +360,11 @@ end :: proc(ctx: ^Context) {
 		ctx.scroll_target.scroll.y += ctx.scroll_delta.y
 	}
 
-	/* unset focus if focus id was not touched this frame */
-	if !ctx.updated_focus {
-		ctx.focus_id = 0
+	/* unset hot if hot id was not touched this frame */
+	if !ctx.updated_hot {
+		ctx.hot_id = 0
 	}
-	ctx.updated_focus = false
+	ctx.updated_hot = false
 
 	/* bring hover root to front if mouse was pressed */
 	if mouse_pressed(ctx) &&
@@ -411,9 +411,9 @@ end :: proc(ctx: ^Context) {
 	}
 }
 
-set_focus :: proc(ctx: ^Context, id: Id) {
-	ctx.focus_id = id
-	ctx.updated_focus = true
+set_hot :: proc(ctx: ^Context, id: Id) {
+	ctx.hot_id = id
+	ctx.updated_hot = true
 }
 
 
@@ -534,7 +534,7 @@ get_current_container :: proc(ctx: ^Context) -> ^Container {
 }
 
 @(private)
-internal_get_container :: proc(ctx: ^Context, id: Id, opt: Options) -> ^Container {
+internal_get_container :: proc(ctx: ^Context, id: Id, opt: Option_Set) -> ^Container {
 	/* try to get existing container from pool */
 	idx, ok := pool_get(ctx, ctx.container_pool[:], id)
 	if ok {
@@ -553,7 +553,7 @@ internal_get_container :: proc(ctx: ^Context, id: Id, opt: Options) -> ^Containe
 	return cnt
 }
 
-get_container :: proc(ctx: ^Context, name: string, opt := Options{}) -> ^Container {
+get_container :: proc(ctx: ^Context, name: string, opt := Option_Set{}) -> ^Container {
 	id := get_id(ctx, name)
 	return internal_get_container(ctx, id, opt)
 }
@@ -887,16 +887,14 @@ draw_control_frame :: proc(
 	id: Id,
 	rect: Rect,
 	colorid: Color_Type,
-	opt := Options{},
+	opt := Option_Set{},
 ) {
 	if .NO_FRAME in opt {
 		return
 	}
 	assert(colorid == .BUTTON || colorid == .BASE)
 	colorid := colorid
-	colorid = Color_Type(
-		int(colorid) + int((ctx.focus_id == id) ? 2 : (ctx.hover_id == id) ? 1 : 0),
-	)
+	colorid = Color_Type(int(colorid) + int((ctx.hot_id == id) ? 2 : (ctx.hover_id == id) ? 1 : 0))
 	ctx.draw_frame(ctx, rect, colorid)
 }
 
@@ -905,7 +903,7 @@ draw_control_text :: proc(
 	str: string,
 	rect: Rect,
 	colorid: Color_Type,
-	opt := Options{},
+	opt := Option_Set{},
 ) {
 	pos: Vec2
 	font := ctx.style.font
@@ -931,11 +929,10 @@ mouse_over :: proc(ctx: ^Context, rect: Rect) -> bool {
 	)
 }
 
-update_control :: proc(ctx: ^Context, id: Id, rect: Rect, opt := Options{}) {
+update_control :: proc(ctx: ^Context, id: Id, rect: Rect, opt := Option_Set{}) {
 	mouseover := mouse_over(ctx, rect)
-
-	if ctx.focus_id == id {
-		ctx.updated_focus = true
+	if ctx.hot_id == id {
+		ctx.updated_hot = true
 	}
 	if .NO_INTERACT in opt {
 		return
@@ -944,18 +941,18 @@ update_control :: proc(ctx: ^Context, id: Id, rect: Rect, opt := Options{}) {
 		ctx.hover_id = id
 	}
 
-	if ctx.focus_id == id {
+	if ctx.hot_id == id {
 		if mouse_pressed(ctx) && !mouseover {
-			set_focus(ctx, 0)
+			set_hot(ctx, 0)
 		}
-		if !mouse_down(ctx) && .HOLD_FOCUS not_in opt {
-			set_focus(ctx, 0)
+		if !mouse_down(ctx) && .HOLD_HOT not_in opt {
+			set_hot(ctx, 0)
 		}
 	}
 
 	if ctx.hover_id == id {
 		if mouse_pressed(ctx) {
-			set_focus(ctx, id)
+			set_hot(ctx, id)
 		} else if !mouseover {
 			ctx.hover_id = 0
 		}
@@ -1003,7 +1000,7 @@ button :: proc(
 	ctx: ^Context,
 	label: string,
 	icon: Icon = .NONE,
-	opt: Options = {.ALIGN_CENTER},
+	opt: Option_Set = {.ALIGN_CENTER},
 ) -> (
 	res: Result_Set,
 ) {
@@ -1011,7 +1008,7 @@ button :: proc(
 	r := layout_next(ctx)
 	update_control(ctx, id, r, opt)
 	/* handle click */
-	if ctx.mouse_pressed_bits == {.LEFT} && ctx.focus_id == id {
+	if ctx.mouse_pressed_bits == {.LEFT} && ctx.hot_id == id {
 		res += {.SUBMIT}
 	}
 	/* draw */
@@ -1051,15 +1048,15 @@ textbox_raw :: proc(
 	textlen: ^int,
 	id: Id,
 	r: Rect,
-	opt := Options{},
+	opt := Option_Set{},
 ) -> (
 	res: Result_Set,
 ) {
-	update_control(ctx, id, r, opt | {.HOLD_FOCUS})
+	update_control(ctx, id, r, opt | {.HOLD_HOT})
 
 	font := ctx.style.font
 
-	if ctx.focus_id == id {
+	if ctx.hot_id == id {
 		/* create a builder backed by the user's buffer */
 		builder := strings.builder_from_bytes(textbuf)
 		non_zero_resize(&builder.buf, textlen^)
@@ -1158,7 +1155,7 @@ textbox_raw :: proc(
 		}
 		/* handle return */
 		if .RETURN in ctx.key_pressed_bits {
-			set_focus(ctx, 0)
+			set_hot(ctx, 0)
 			res += {.SUBMIT}
 		}
 
@@ -1187,7 +1184,7 @@ textbox_raw :: proc(
 
 	/* draw */
 	draw_control_frame(ctx, id, r, .BASE, opt)
-	if ctx.focus_id == id {
+	if ctx.hot_id == id {
 		text_color := ctx.style.colors[.TEXT]
 		sel_color := ctx.style.colors[.SELECTION_BG]
 		textw := ctx.text_width(font, textstr)
@@ -1229,7 +1226,7 @@ number_textbox :: proc(ctx: ^Context, value: ^f32, r: Rect, id: Id, fmt_string: 
 	}
 	if ctx.number_edit_id == id {
 		res := textbox_raw(ctx, ctx.number_edit_buf[:], &ctx.number_edit_len, id, r, {})
-		if .SUBMIT in res || ctx.focus_id != id {
+		if .SUBMIT in res || ctx.hot_id != id {
 			value^, _ = parse_f32(string(ctx.number_edit_buf[:ctx.number_edit_len]))
 			ctx.number_edit_id = 0
 		} else {
@@ -1239,7 +1236,7 @@ number_textbox :: proc(ctx: ^Context, value: ^f32, r: Rect, id: Id, fmt_string: 
 	return false
 }
 
-textbox :: proc(ctx: ^Context, buf: []u8, textlen: ^int, opt := Options{}) -> Result_Set {
+textbox :: proc(ctx: ^Context, buf: []u8, textlen: ^int, opt := Option_Set{}) -> Result_Set {
 	id := get_id(ctx, uintptr(&buf[0]))
 	r := layout_next(ctx)
 	return textbox_raw(ctx, buf, textlen, id, r, opt)
@@ -1251,7 +1248,7 @@ slider :: proc(
 	low, high: f32,
 	step: f32 = 0.0,
 	fmt_string: string = SLIDER_FMT,
-	opt: Options = {.ALIGN_CENTER},
+	opt: Option_Set = {.ALIGN_CENTER},
 ) -> (
 	res: Result_Set,
 ) {
@@ -1269,7 +1266,7 @@ slider :: proc(
 	update_control(ctx, id, base, opt)
 
 	/* handle input */
-	if ctx.focus_id == id && ctx.mouse_down_bits == {.LEFT} {
+	if ctx.hot_id == id && ctx.mouse_down_bits == {.LEFT} {
 		v = low + f32(ctx.mouse_pos.x - base.x) * (high - low) / f32(base.w)
 		if step != 0.0 {
 			v = math.floor((v + step / 2) / step) * step
@@ -1300,7 +1297,7 @@ number :: proc(
 	value: ^f32,
 	step: f32,
 	fmt_string: string = SLIDER_FMT,
-	opt: Options = {.ALIGN_CENTER},
+	opt: Option_Set = {.ALIGN_CENTER},
 ) -> (
 	res: Result_Set,
 ) {
@@ -1317,7 +1314,7 @@ number :: proc(
 	update_control(ctx, id, base, opt)
 
 	/* handle input */
-	if ctx.focus_id == id && ctx.mouse_down_bits == {.LEFT} {
+	if ctx.hot_id == id && ctx.mouse_down_bits == {.LEFT} {
 		value^ += f32(ctx.mouse_delta.x) * step
 	}
 	/* set flag if value changed */
@@ -1335,7 +1332,12 @@ number :: proc(
 }
 
 @(private)
-_header :: proc(ctx: ^Context, label: string, is_treenode: bool, opt := Options{}) -> Result_Set {
+_header :: proc(
+	ctx: ^Context,
+	label: string,
+	is_treenode: bool,
+	opt := Option_Set{},
+) -> Result_Set {
 	id := get_id(ctx, label)
 	idx, active := pool_get(ctx, ctx.treenode_pool[:], id)
 	expanded := .EXPANDED in opt ? !active : active
@@ -1343,7 +1345,7 @@ _header :: proc(ctx: ^Context, label: string, is_treenode: bool, opt := Options{
 	r := layout_next(ctx)
 	update_control(ctx, id, r, {})
 	/* handle click */
-	if ctx.mouse_pressed_bits == {.LEFT} && ctx.focus_id == id {
+	if ctx.mouse_pressed_bits == {.LEFT} && ctx.hot_id == id {
 		active = !active
 	}
 	/* update pool ref */
@@ -1376,11 +1378,11 @@ _header :: proc(ctx: ^Context, label: string, is_treenode: bool, opt := Options{
 	return expanded ? {.ACTIVE} : {}
 }
 
-header :: proc(ctx: ^Context, label: string, opt := Options{}) -> Result_Set {
+header :: proc(ctx: ^Context, label: string, opt := Option_Set{}) -> Result_Set {
 	return _header(ctx, label, false, opt)
 }
 
-begin_treenode :: proc(ctx: ^Context, label: string, opt := Options{}) -> Result_Set {
+begin_treenode :: proc(ctx: ^Context, label: string, opt := Option_Set{}) -> Result_Set {
 	res := _header(ctx, label, true, opt)
 	if .ACTIVE in res {
 		get_layout(ctx).indent += ctx.style.indent
@@ -1395,7 +1397,7 @@ end_treenode :: proc(ctx: ^Context) {
 }
 
 
-scoped_end_treenode :: proc(ctx: ^Context, _: string, _: Options, result_set: Result_Set) {
+scoped_end_treenode :: proc(ctx: ^Context, _: string, _: Option_Set, result_set: Result_Set) {
 	if result_set != nil {
 		end_treenode(ctx)
 	}
@@ -1403,7 +1405,7 @@ scoped_end_treenode :: proc(ctx: ^Context, _: string, _: Options, result_set: Re
 
 /* This is scoped and is intended to be use in the condition of a if-statement */
 @(deferred_in_out = scoped_end_treenode)
-treenode :: proc(ctx: ^Context, label: string, opt := Options{}) -> Result_Set {
+treenode :: proc(ctx: ^Context, label: string, opt := Option_Set{}) -> Result_Set {
 	return begin_treenode(ctx, label, opt)
 }
 
@@ -1428,7 +1430,7 @@ scrollbar :: proc(ctx: ^Context, cnt: ^Container, _b: ^Rect, cs: Vec2, id_string
 
 		/* handle input */
 		update_control(ctx, id, transmute(Rect)base)
-		if ctx.focus_id == id && .LEFT in ctx.mouse_down_bits {
+		if ctx.hot_id == id && .LEFT in ctx.mouse_down_bits {
 			cnt.scroll[i] += ctx.mouse_delta[i] * cs[i] / base.size[i]
 		}
 		/* clamp scroll to limits */
@@ -1469,7 +1471,7 @@ scrollbars :: proc(ctx: ^Context, cnt: ^Container, body: ^Rect) {
 }
 
 @(private)
-push_container_body :: proc(ctx: ^Context, cnt: ^Container, body: Rect, opt := Options{}) {
+push_container_body :: proc(ctx: ^Context, cnt: ^Container, body: Rect, opt := Option_Set{}) {
 	body := body
 	if .NO_SCROLL not_in opt {
 		scrollbars(ctx, cnt, &body)
@@ -1508,7 +1510,7 @@ end_root_container :: proc(ctx: ^Context) {
 	pop_container(ctx)
 }
 
-begin_window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Options{}) -> bool {
+begin_window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Option_Set{}) -> bool {
 	assert(title != "", "missing window title")
 	id := get_id(ctx, title)
 	cnt := internal_get_container(ctx, id, opt)
@@ -1553,7 +1555,7 @@ begin_window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Options{})
 			tid := get_id(ctx, "!title")
 			update_control(ctx, tid, tr, opt)
 			draw_control_text(ctx, title, tr, .TITLE_TEXT, opt)
-			if tid == ctx.focus_id && ctx.mouse_down_bits == {.LEFT} {
+			if tid == ctx.hot_id && ctx.mouse_down_bits == {.LEFT} {
 				cnt.rect.x += ctx.mouse_delta.x
 				cnt.rect.y += ctx.mouse_delta.y
 			}
@@ -1586,12 +1588,12 @@ begin_window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Options{})
 		draw_icon(ctx, .RESIZE, r, ctx.style.colors[.TEXT])
 		update_control(ctx, rid, r, opt)
 
-		if rid == ctx.focus_id && .LEFT in ctx.mouse_pressed_bits {
+		if rid == ctx.hot_id && .LEFT in ctx.mouse_pressed_bits {
 			tmp_start = ctx.mouse_pos
 			tmp_size = {cnt.rect.w, cnt.rect.h}
 		}
 
-		if rid == ctx.focus_id && .LEFT in ctx.mouse_down_bits {
+		if rid == ctx.hot_id && .LEFT in ctx.mouse_down_bits {
 			cnt.rect.w = max(96, tmp_size.x + ctx.mouse_pos.x - tmp_start.x)
 			cnt.rect.h = max(64, tmp_size.y + ctx.mouse_pos.y - tmp_start.y)
 		}
@@ -1625,11 +1627,11 @@ end_window :: proc(ctx: ^Context) {
 
 /* This is scoped and is intended to be use in the condition of a if-statement */
 @(deferred_in_out = scoped_end_window)
-window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Options{}) -> bool {
+window :: proc(ctx: ^Context, title: string, rect: Rect, opt := Option_Set{}) -> bool {
 	return begin_window(ctx, title, rect, opt)
 }
 
-scoped_end_window :: proc(ctx: ^Context, _: string, _: Rect, _: Options, ok: bool) {
+scoped_end_window :: proc(ctx: ^Context, _: string, _: Rect, _: Option_Set, ok: bool) {
 	if ok {
 		end_window(ctx)
 	}
@@ -1646,7 +1648,7 @@ open_popup :: proc(ctx: ^Context, name: string) {
 	bring_to_front(ctx, cnt)
 }
 
-close_popup :: proc(ctx: ^Context, title: string, opt := Options{}) {
+close_popup :: proc(ctx: ^Context, title: string, opt := Option_Set{}) {
 	assert(title != "", "missing popup title")
 	id := get_id(ctx, title)
 	cnt := internal_get_container(ctx, id, opt)
@@ -1654,7 +1656,7 @@ close_popup :: proc(ctx: ^Context, title: string, opt := Options{}) {
 }
 
 begin_popup :: proc(ctx: ^Context, name: string) -> bool {
-	opt := Options{.POPUP, .AUTO_SIZE, .NO_RESIZE, .NO_SCROLL, .NO_TITLE, .CLOSED}
+	opt := Option_Set{.POPUP, .AUTO_SIZE, .NO_RESIZE, .NO_SCROLL, .NO_TITLE, .CLOSED}
 	return begin_window(ctx, name, Rect{}, opt)
 }
 
@@ -1675,7 +1677,7 @@ scoped_end_popup :: proc(ctx: ^Context, _: string, ok: bool) {
 	}
 }
 
-begin_panel :: proc(ctx: ^Context, name: string, opt := Options{}) {
+begin_panel :: proc(ctx: ^Context, name: string, opt := Option_Set{}) {
 	assert(name != "", "missing panel name")
 	push_id(ctx, name)
 	cnt := internal_get_container(ctx, ctx.last_id, opt)
